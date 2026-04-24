@@ -297,4 +297,51 @@ router.post('/models/initialize', async (req, res) => {
   }
 });
 
+// Generate PDF Report
+router.post('/generate-report', async (req, res) => {
+  try {
+    const { granularity, startDate, endDate } = req.body;
+
+    // Validate parameters
+    if (!granularity || !['hourly', 'daily', 'weekly', 'monthly', 'yearly'].includes(granularity)) {
+      return res.status(400).json({ error: 'Invalid granularity. Must be: hourly, daily, weekly, monthly, or yearly' });
+    }
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'startDate and endDate are required' });
+    }
+
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+
+    if (start > end) {
+      return res.status(400).json({ error: 'startDate must be before endDate' });
+    }
+
+    // Fetch readings for the date range
+    const readings = await Reading.find({
+      timestamp: { $gte: start, $lte: end }
+    })
+      .sort({ timestamp: 1 })
+      .lean();
+
+    if (readings.length === 0) {
+      return res.status(404).json({ error: 'No readings found for the specified date range' });
+    }
+
+    // Generate report
+    const ReportGenerator = require('../utils/reportGenerator');
+    const generator = new ReportGenerator(readings, 'Lab Sensor A');
+    const pdfBuffer = await generator.generateReport(granularity, start, end);
+
+    // Send PDF as response
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="air-quality-report-${granularity}-${Date.now()}.pdf"`);
+    res.send(pdfBuffer);
+  } catch (err) {
+    console.error('Report generation error:', err);
+    res.status(500).json({ error: 'Failed to generate report: ' + err.message });
+  }
+});
+
 module.exports = router;

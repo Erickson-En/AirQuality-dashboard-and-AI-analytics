@@ -32,6 +32,10 @@ export default function HistoricalData() {
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
   const [stats, setStats] = useState({});
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportStartDate, setReportStartDate] = useState(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10));
+  const [reportEndDate, setReportEndDate] = useState(new Date().toISOString().slice(0, 10));
+  const [reportGranularity, setReportGranularity] = useState('daily');
 
 
   // Granularity options
@@ -237,6 +241,45 @@ export default function HistoricalData() {
     return value;
   };
 
+  // Generate PDF Report
+  const handleGenerateReport = async () => {
+    if (!reportStartDate || !reportEndDate) {
+      alert('Please select both start and end dates');
+      return;
+    }
+
+    if (new Date(reportStartDate) > new Date(reportEndDate)) {
+      alert('Start date must be before end date');
+      return;
+    }
+
+    try {
+      setReportLoading(true);
+      const response = await api.post('/api/analytics/generate-report', {
+        granularity: reportGranularity,
+        startDate: new Date(reportStartDate).toISOString(),
+        endDate: new Date(reportEndDate).toISOString()
+      }, {
+        responseType: 'blob'
+      });
+
+      // Create a blob download
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `air-quality-report-${reportGranularity}-${Date.now()}.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      link.parentNode.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Report generation error:', err);
+      alert('Failed to generate report: ' + (err.response?.data?.error || err.message));
+    } finally {
+      setReportLoading(false);
+    }
+  };
+
   if (loading) {
     return (
       <div style={{ padding: 24, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '60vh' }}>
@@ -370,6 +413,121 @@ export default function HistoricalData() {
           })}
         </div>
       )}
+
+      {/* Report Generation Section */}
+      <div style={{
+        background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(139, 92, 246, 0.1) 100%)',
+        border: '1px solid rgba(59, 130, 246, 0.3)',
+        borderRadius: 16,
+        padding: 24,
+        backdropFilter: 'blur(10px)'
+      }}>
+        <h3 style={{ margin: '0 0 16px 0', fontSize: '1.1rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 10 }}>
+          📊 Generate PDF Report
+        </h3>
+        
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, marginBottom: 16 }}>
+          {/* Report Granularity */}
+          <div>
+            <label style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'rgba(255,255,255,0.6)', display: 'block', marginBottom: 8, fontWeight: 600 }}>
+              Report Type
+            </label>
+            <select 
+              value={reportGranularity}
+              onChange={(e) => setReportGranularity(e.target.value)}
+              style={{
+                width: '100%',
+                background: 'rgba(255,255,255,0.05)',
+                border: '1px solid rgba(255,255,255,0.15)',
+                borderRadius: 8,
+                color: '#fff',
+                padding: '10px 12px',
+                fontSize: '0.9rem',
+                outline: 'none',
+                cursor: 'pointer',
+                transition: 'border 0.2s'
+              }}
+            >
+              <option value="hourly">Hourly Report</option>
+              <option value="daily">Daily Report</option>
+              <option value="weekly">Weekly Report</option>
+              <option value="monthly">Monthly Report</option>
+              <option value="yearly">Yearly Report</option>
+            </select>
+          </div>
+
+          {/* Start Date */}
+          <div>
+            <label style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'rgba(255,255,255,0.6)', display: 'block', marginBottom: 8, fontWeight: 600 }}>
+              Start Date
+            </label>
+            <input 
+              type="date"
+              value={reportStartDate}
+              onChange={(e) => setReportStartDate(e.target.value)}
+              style={{
+                width: '100%',
+                background: 'rgba(255,255,255,0.05)',
+                border: '1px solid rgba(255,255,255,0.15)',
+                borderRadius: 8,
+                color: '#fff',
+                padding: '10px 12px',
+                fontSize: '0.9rem',
+                outline: 'none',
+                cursor: 'pointer',
+                transition: 'border 0.2s'
+              }}
+            />
+          </div>
+
+          {/* End Date */}
+          <div>
+            <label style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'rgba(255,255,255,0.6)', display: 'block', marginBottom: 8, fontWeight: 600 }}>
+              End Date
+            </label>
+            <input 
+              type="date"
+              value={reportEndDate}
+              onChange={(e) => setReportEndDate(e.target.value)}
+              style={{
+                width: '100%',
+                background: 'rgba(255,255,255,0.05)',
+                border: '1px solid rgba(255,255,255,0.15)',
+                borderRadius: 8,
+                color: '#fff',
+                padding: '10px 12px',
+                fontSize: '0.9rem',
+                outline: 'none',
+                cursor: 'pointer',
+                transition: 'border 0.2s'
+              }}
+            />
+          </div>
+
+          {/* Generate Button */}
+          <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+            <button
+              onClick={handleGenerateReport}
+              disabled={reportLoading}
+              style={{
+                width: '100%',
+                background: reportLoading ? 'rgba(255,255,255,0.1)' : 'linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%)',
+                border: 'none',
+                borderRadius: 8,
+                color: '#fff',
+                padding: '12px 24px',
+                fontSize: '0.9rem',
+                fontWeight: 600,
+                cursor: reportLoading ? 'not-allowed' : 'pointer',
+                transition: 'all 0.2s',
+                opacity: reportLoading ? 0.6 : 1
+              }}
+            >
+              {reportLoading ? '⏳ Generating...' : '📥 Download PDF'}
+            </button>
+          </div>
+        </div>
+      </div>
 
       {/* No Data State */}
       {!loading && aggregatedData.length === 0 && (
