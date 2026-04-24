@@ -241,7 +241,7 @@ export default function HistoricalData() {
     return value;
   };
 
-  // Generate PDF Report
+  // Generate PDF Report using jsPDF
   const handleGenerateReport = async () => {
     if (!reportStartDate || !reportEndDate) {
       alert('Please select both start and end dates');
@@ -259,19 +259,80 @@ export default function HistoricalData() {
         granularity: reportGranularity,
         startDate: new Date(reportStartDate).toISOString(),
         endDate: new Date(reportEndDate).toISOString()
-      }, {
-        responseType: 'blob'
       });
 
-      // Create a blob download
-      const url = window.URL.createObjectURL(new Blob([response.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `air-quality-report-${reportGranularity}-${Date.now()}.pdf`);
-      document.body.appendChild(link);
-      link.click();
-      link.parentNode.removeChild(link);
-      window.URL.revokeObjectURL(url);
+      const reportData = response.data;
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF('p', 'mm', 'a4');
+      
+      let yPosition = 20;
+      const pageHeight = doc.internal.pageSize.getHeight();
+      const margin = 15;
+      const maxWidth = 180;
+
+      const addText = (text, fontSize = 12, bold = false, indent = 0) => {
+        if (yPosition > pageHeight - 20) {
+          doc.addPage();
+          yPosition = 20;
+        }
+        doc.setFontSize(fontSize);
+        doc.setFont('helvetica', bold ? 'bold' : 'normal');
+        const lines = doc.splitTextToSize(text, maxWidth - indent);
+        doc.text(lines, margin + indent, yPosition);
+        yPosition += (lines.length * fontSize * 0.35) + 5;
+      };
+
+      // Build PDF sections
+      addText('Air Quality Report', 20, true);
+      addText(`Type: ${reportData.header.type}`, 11);
+      addText(`Location: ${reportData.header.location}`, 11);
+      addText(`Period: ${reportData.header.period}`, 11);
+      addText(`Generated: ${reportData.header.generated}`, 10);
+      
+      addText('\nExecutive Summary', 14, true);
+      if (reportData.executiveSummary) {
+        Object.entries(reportData.executiveSummary).forEach(([key, value]) => {
+          addText(`• ${key}: ${value}`, 10, false, 5);
+        });
+      }
+
+      addText('\nPollutant Analysis', 14, true);
+      if (reportData.pollutantAnalysis) {
+        Object.entries(reportData.pollutantAnalysis).forEach(([pollutant, stats]) => {
+          addText(pollutant, 11, true, 5);
+          Object.entries(stats).forEach(([k, v]) => {
+            addText(`  ${k}: ${v}`, 9, false, 10);
+          });
+        });
+      }
+
+      addText('\nEnvironmental Parameters', 14, true);
+      if (reportData.environmental) {
+        Object.entries(reportData.environmental).forEach(([param, stats]) => {
+          addText(param, 11, true, 5);
+          Object.entries(stats).forEach(([k, v]) => {
+            addText(`  ${k}: ${v}`, 9, false, 10);
+          });
+        });
+      }
+
+      addText('\nHealth & Compliance', 14, true);
+      if (reportData.healthCompliance) {
+        Object.entries(reportData.healthCompliance).forEach(([category, data]) => {
+          addText(`• ${category}: ${data.count} readings (${data.percentage})`, 10, false, 5);
+        });
+      }
+
+      addText('\nSensor Health Status', 14, true);
+      if (reportData.sensorHealth) {
+        Object.entries(reportData.sensorHealth).forEach(([key, value]) => {
+          const label = key.replace(/([A-Z])/g, ' $1').trim();
+          addText(`• ${label}: ${value}`, 10, false, 5);
+        });
+      }
+
+      doc.save(`air-quality-report-${reportGranularity}-${Date.now()}.pdf`);
+      alert('✅ PDF Downloaded Successfully!');
     } catch (err) {
       console.error('Report generation error:', err);
       alert('Failed to generate report: ' + (err.response?.data?.error || err.message));
