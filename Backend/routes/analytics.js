@@ -297,7 +297,7 @@ router.post('/models/initialize', async (req, res) => {
   }
 });
 
-// Generate PDF Report
+// Generate Report (JSON format, no PDF on backend)
 router.post('/generate-report', async (req, res) => {
   try {
     const { granularity, startDate, endDate } = req.body;
@@ -332,12 +332,10 @@ router.post('/generate-report', async (req, res) => {
     // Generate report
     const ReportGenerator = require('../utils/reportGenerator');
     const generator = new ReportGenerator(readings, 'Lab Sensor A');
-    const pdfBuffer = await generator.generateReport(granularity, start, end);
+    const reportData = await generator.generateReport(granularity, start, end);
 
-    // Send PDF as response
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="air-quality-report-${granularity}-${Date.now()}.pdf"`);
-    res.send(pdfBuffer);
+   // Return as JSON
+    res.json(reportData);
   } catch (err) {
     console.error('Report generation error:', err);
     res.status(500).json({ error: 'Failed to generate report: ' + err.message });
