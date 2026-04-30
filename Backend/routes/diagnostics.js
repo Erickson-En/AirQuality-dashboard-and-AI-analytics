@@ -56,9 +56,9 @@ router.get('/sensor-status', async (req, res) => {
             });
         }
 
-        // 2. Check each critical sensor
+        // 2. Check each critical sensor (values stored under reading.metrics)
         for (const sensor of CRITICAL_SENSORS) {
-            const value = latest[sensor];
+            const value = (latest.metrics || {})[sensor];
             const range = SENSOR_RANGES[sensor];
             let status = 'OK';
             let issue = null;
@@ -99,7 +99,7 @@ router.get('/sensor-status', async (req, res) => {
                 }
                 // Check if stuck (repeating same value)
                 else if (history.length >= 5) {
-                    const recent = history.slice(0, 5).map(h => h[sensor]).filter(v => v !== null);
+                    const recent = history.slice(0, 5).map(h => (h.metrics || {})[sensor]).filter(v => v !== null && v !== undefined);
                     if (recent.length === 5 && new Set(recent).size === 1) {
                         status = 'STUCK';
                         issue = {
@@ -115,7 +115,7 @@ router.get('/sensor-status', async (req, res) => {
 
             sensorStatus[sensor] = {
                 status,
-                value: latest[sensor],
+                value: (latest.metrics || {})[sensor],
                 unit: range.unit,
                 range: range.unit ? `${range.min}-${range.max}` : 'N/A'
             };
@@ -125,10 +125,10 @@ router.get('/sensor-status', async (req, res) => {
             }
         }
 
-        // 3. Check for optional sensors
+        // 3. Check for optional sensors (values stored under reading.metrics)
         const optionalSensors = ['co', 'no2', 'o3', 'voc_index', 'nox_index', 'pressure'];
         for (const sensor of optionalSensors) {
-            const value = latest[sensor];
+            const value = (latest.metrics || {})[sensor];
             const range = SENSOR_RANGES[sensor];
             
             if (value !== null && value !== undefined) {
@@ -160,7 +160,7 @@ router.get('/sensor-status', async (req, res) => {
                 warning: issues.filter(i => i.severity === 'WARNING').length,
                 total: issues.length
             },
-            activeSensors: CRITICAL_SENSORS.filter(s => latest[s] !== null).length,
+            activeSensors: CRITICAL_SENSORS.filter(s => (latest.metrics || {})[s] != null).length,
             totalCriticalSensors: CRITICAL_SENSORS.length
         });
     } catch (err) {
@@ -228,7 +228,7 @@ router.get('/health-summary', async (req, res) => {
         }
 
         const age = (Date.now() - new Date(latest.timestamp)) / 1000; // seconds
-        const activeSensors = CRITICAL_SENSORS.filter(s => latest[s] !== null).length;
+        const activeSensors = CRITICAL_SENSORS.filter(s => (latest.metrics || {})[s] != null).length;
         const missingCritical = CRITICAL_SENSORS.length - activeSensors;
 
         const healthy = age < 900 && missingCritical === 0;
