@@ -26,6 +26,10 @@ const chatbotRouter = require('./routes/chatbot');
 const analyticsRouter = require('./routes/analytics');
 const diagnosticsRouter = require('./routes/diagnostics');
 
+// Email
+const { sendAQIAlert, sendDailyDigest, verifyEmailConfig, calculateAQI, aqiCategory } = require('./utils/emailService');
+const { startEmailScheduler, handleAlertEmails } = require('./utils/emailScheduler');
+
 const app = express();
 app.use(express.json());
 
@@ -272,9 +276,59 @@ io.on("connection", socket => {
   // Suppress per-connection logs to avoid Railway log rate limits
 });
 
+// ---------- EMAIL TEST ----------
+app.post("/api/email/test", async (req, res) => {
+  const { type, to } = req.body;
+  if (!to) return res.status(400).json({ error: 'to is required' });
+  try {
+    if (type === 'alert') {
+      await sendAQIAlert({
+        to,
+        name: 'Admin',
+        metrics: { pm25: 85, pm10: 120, co: 5, co2: 800, temperature: 28, humidity: 65 },
+        aqi: 165,
+        triggeredMetrics: [
+          { metric: 'pm25', value: 85, threshold: 35, unit: 'µg/m³' },
+          { metric: 'pm10', value: 120, threshold: 45, unit: 'µg/m³' },
+        ],
+      });
+    } else {
+      await sendDailyDigest({
+        to,
+        name: 'Admin',
+        stats: {
+          avgPM25: 42.3, maxPM25: 88.1, minPM25: 12.4,
+          avgPM10: 68.7, avgTemp: 24.2, avgHumidity: 61.5,
+          prevAvgPM25: 38.0,
+          hourlyBreakdown: [
+            { period: '00:00–04:00', pm25: 18.2 },
+            { period: '04:00–08:00', pm25: 31.4 },
+            { period: '08:00–12:00', pm25: 65.7 },
+            { period: '12:00–16:00', pm25: 52.1 },
+            { period: '16:00–20:00', pm25: 44.8 },
+            { period: '20:00–24:00', pm25: 27.3 },
+          ],
+        },
+        todayReadings: 48,
+      });
+    }
+    res.json({ success: true, sent: true, to, type });
+  } catch (err) {
+    console.error('[Email Test]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---------- HEALTH ----------
 app.get("/health", (_, res) => res.json({ status: "ok" }));
 
 // ---------- START ----------
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => console.log(` Server listening on ${PORT}`));
+server.listen(PORT, () => {
+  console.log(` Server listening on ${PORT}`);
+  // Start email scheduler (daily digest cron)
+  const User = require('./models/user');
+  verifyEmailConfig().then(ok => {
+    if (ok) startEmailScheduler(Reading, User);
+  });
+});
