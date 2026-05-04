@@ -49,6 +49,7 @@ export default function RealTimeData() {
   const [alerts,          setAlerts]          = useState([]);
   const [autoRefresh,     setAutoRefresh]     = useState(true);
   const [sensorHealth,    setSensorHealth]    = useState(null);
+  const [bucketMinutes,   setBucketMinutes]   = useState(5);
 
   // ── Statistics ───────────────────────────────────────────────
   const stats = useMemo(() => {
@@ -71,6 +72,23 @@ export default function RealTimeData() {
       voc_index: calc('voc_index'), nox_index: calc('nox_index'),
     };
   }, [series]);
+
+  // ── Time-bucketed AQI series ─────────────────────────────────
+  const bucketedAQI = useMemo(() => {
+    if (!series.length) return [];
+    const bucketMs = bucketMinutes * 60 * 1000;
+    const buckets  = {};
+    series.forEach(pt => {
+      if (pt.aqi == null) return;
+      const key = Math.floor(pt.ts / bucketMs) * bucketMs;
+      if (!buckets[key]) buckets[key] = { ts: key, sum: 0, count: 0 };
+      buckets[key].sum   += pt.aqi;
+      buckets[key].count += 1;
+    });
+    return Object.values(buckets)
+      .sort((a, b) => a.ts - b.ts)
+      .map(b => ({ ts: b.ts, aqi: Math.round(b.sum / b.count) }));
+  }, [series, bucketMinutes]);
 
   const currentAQI = useMemo(() => {
     if (!metrics.pm25) return null;
@@ -429,20 +447,51 @@ export default function RealTimeData() {
       </div>
 
       {/* ── AQI TREND CHART ── */}
-      <div className="charts-row">
-        <h3>Air Quality Index Trend</h3>
-        <ResponsiveContainer width="100%" height={320}>
-          <LineChart data={series} syncId="rt">
+      <div className="charts-row" style={{ ...cardStyle }}>
+        {/* Header + bucket selector */}
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px', flexWrap:'wrap', gap:'10px' }}>
+          <div>
+            <h3 style={{ margin:0, fontSize:'16px', fontWeight:'700', letterSpacing:'-0.01em' }}>
+              Air Quality Index Trend
+            </h3>
+            <div style={{ fontSize:'12px', color:'rgba(255,255,255,0.4)', marginTop:'3px' }}>
+              {bucketedAQI.length} buckets · {series.length} raw readings
+            </div>
+          </div>
+          {/* Bucket selector */}
+          <div style={{ display:'flex', gap:'4px', alignItems:'center' }}>
+            <span style={{ fontSize:'11px', color:'rgba(255,255,255,0.4)', marginRight:'4px', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.06em' }}>Interval</span>
+            {[1, 5, 15, 30, 60].map(m => (
+              <button key={m} onClick={() => setBucketMinutes(m)}
+                style={{ padding:'4px 10px', borderRadius:'6px', fontSize:'12px', fontWeight:'600', cursor:'pointer',
+                  border: bucketMinutes === m ? '1px solid #ff9800' : '1px solid rgba(255,255,255,0.1)',
+                  background: bucketMinutes === m ? 'rgba(255,152,0,0.15)' : 'rgba(255,255,255,0.04)',
+                  color: bucketMinutes === m ? '#ff9800' : 'rgba(255,255,255,0.5)',
+                  transition:'all 0.15s' }}>
+                {m < 60 ? `${m}m` : '1h'}
+              </button>
+            ))}
+          </div>
+        </div>
+        <ResponsiveContainer width="100%" height={300}>
+          <LineChart data={bucketedAQI} syncId="rt">
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.07)" />
             <XAxis dataKey="ts" type="number" scale="time" domain={['auto','auto']}
-              tickFormatter={v => new Date(v).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })} />
-            <YAxis width={48} tickLine={false} />
-            <Tooltip labelFormatter={v => new Date(v).toLocaleString()}
-              formatter={v => (v ? v.toFixed(1) : 'N/A')} />
-            <Legend />
-            <Brush height={14} travellerWidth={8} />
+              tickFormatter={v => new Date(v).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })}
+              tick={{ fill:'rgba(255,255,255,0.4)', fontSize:11 }} axisLine={false} tickLine={false} />
+            <YAxis width={42} tickLine={false} axisLine={false}
+              tick={{ fill:'rgba(255,255,255,0.4)', fontSize:11 }}
+              label={{ value:'AQI', angle:-90, position:'insideLeft', fill:'rgba(255,255,255,0.3)', fontSize:11 }} />
+            <Tooltip
+              labelFormatter={v => new Date(v).toLocaleString([], { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' })}
+              formatter={(v, name) => [v != null ? `${v} AQI` : 'N/A', name]}
+              contentStyle={{ background:'rgba(15,20,40,0.95)', border:'1px solid rgba(255,152,0,0.4)', borderRadius:'8px', fontSize:'13px' }}
+              labelStyle={{ color:'rgba(255,255,255,0.6)' }} />
+            <Legend wrapperStyle={{ fontSize:'12px' }} />
+            <Brush height={14} travellerWidth={8} fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.1)" />
             <Line type="monotone" dataKey="aqi" stroke="#ff9800" strokeWidth={2.5}
-              dot={false} activeDot={{ r: 5 }} name="AQI" />
+              dot={{ r:3, fill:'#ff9800', strokeWidth:0 }} activeDot={{ r:6, stroke:'#ff9800', strokeWidth:2, fill:'#1a1a2e' }}
+              name="AQI" connectNulls />
           </LineChart>
         </ResponsiveContainer>
       </div>
