@@ -2,9 +2,12 @@ import axios from 'axios';
 import { io } from 'socket.io-client';
 
 // Determine base URL for API.
-// Priority: explicit env var -> localhost:5000 in dev -> current origin (production build) -> fallback.
+// Priority: REACT_APP_BACKEND_URL -> REACT_APP_API_URL -> auto-detect -> fallback.
+// REACT_APP_BACKEND_URL is preferred because it cannot be overridden by stale Vercel dashboard vars.
 function resolveApiBase() {
-  // Highest precedence: explicit environment override.
+  // Highest precedence: new canonical env var (set in .env.production, not Vercel dashboard).
+  if (process.env.REACT_APP_BACKEND_URL) return process.env.REACT_APP_BACKEND_URL;
+  // Fallback: legacy env var (may be overridden by Vercel dashboard — avoid relying on this).
   if (process.env.REACT_APP_API_URL) return process.env.REACT_APP_API_URL;
 
   if (typeof window !== 'undefined') {
