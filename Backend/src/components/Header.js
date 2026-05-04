@@ -1,0 +1,45 @@
+// src/components/Header.js
+import React from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
+
+export default function Header() {
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login', { replace: true });
+  };
+
+  // Header is intentionally minimal — page titles live inside each page.
+  // This top bar shows the signed-in user and a logout button.
+  if (!user) return null;
+
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'flex-end',
+      gap: 10,
+      marginBottom: 4,
+      padding: '0 0 12px 0',
+      borderBottom: '1px solid rgba(255,255,255,0.05)',
+    }}>
+      <span style={{
+        fontSize: 12,
+        color: 'rgba(255,255,255,0.4)',
+        fontWeight: 400,
+      }}>
+        {user.name || user.email || 'Signed in'}
+      </span>
+      <button
+        className="btn"
+        onClick={handleLogout}
+        style={{ padding: '5px 12px', fontSize: 12 }}
+      >
+        Sign out
+      </button>
+    </div>
+  );
+}
