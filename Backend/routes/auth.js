@@ -1,3 +1,4 @@
+// backend/routes/auth.js
 const express = require('express');
 const router = express.Router();
 const User = require('../models/user');
@@ -25,13 +26,13 @@ router.post('/signup', async (req, res) => {
       console.error('[Auth] Welcome email failed:', err.message)
     );
 
-    // Do not send password back
     return res.status(201).json({
       message: 'Signup successful',
       user: {
         id: user._id,
         name: user.name,
         email: user.email,
+        role: user.role,
       },
     });
   } catch (err) {
@@ -65,11 +66,47 @@ router.post('/login', async (req, res) => {
         id: user._id,
         name: user.name,
         email: user.email,
+        role: user.role,   // ← included so frontend knows if user is admin
       },
     });
   } catch (err) {
     console.error('Login error:', err);
     return res.status(500).json({ message: 'Server error logging in' });
+  }
+});
+
+// PUT /api/auth/profile/:id   – update display name / email
+router.put('/profile/:id', async (req, res) => {
+  try {
+    const { name, email } = req.body;
+    const updated = await User.findByIdAndUpdate(
+      req.params.id,
+      { name, email },
+      { new: true }
+    ).select('-password');
+    if (!updated) return res.status(404).json({ message: 'User not found' });
+    res.json({ message: 'Profile updated', user: updated });
+  } catch (err) {
+    res.status(500).json({ message: 'Error updating profile' });
+  }
+});
+
+// PUT /api/auth/password/:id  – change password
+router.put('/password/:id', async (req, res) => {
+  try {
+    const { current, next } = req.body;
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const ok = await user.comparePassword(current);
+    if (!ok) return res.status(401).json({ message: 'Current password is incorrect' });
+
+    user.password = next;
+    await user.save(); // pre-save hook re-hashes
+
+    res.json({ message: 'Password changed successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Error changing password' });
   }
 });
 

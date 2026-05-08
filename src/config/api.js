@@ -32,13 +32,25 @@ export const api = axios.create({
   timeout: 15000,
 });
 
+// Automatically send the logged-in user's ID so admin routes can verify role.
+// The backend requireAdmin middleware reads the X-User-Id header.
+api.interceptors.request.use((config) => {
+  try {
+    const stored = localStorage.getItem('aq_user');
+    if (stored) {
+      const u = JSON.parse(stored);
+      const id = u?.id || u?._id;
+      if (id) config.headers['X-User-Id'] = id;
+    }
+  } catch (_) {}
+  return config;
+});
+
 export const socket = io(API_BASE, {
   transports: ['websocket', 'polling'],
 });
 
 // Debug: log API base once so we can confirm in browser console
-// (Remove this line after connectivity is confirmed.)
 /* eslint-disable no-console */
 console.log('[API] Using base URL:', API_BASE);
 /* eslint-enable no-console */
-

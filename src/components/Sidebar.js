@@ -11,9 +11,12 @@ const NAV_ITEMS = [
   { path: '/settings',   label: 'Settings',     icon: '⚙',  title: 'Configuration' },
 ];
 
+// Admin-only nav item shown conditionally below
+const ADMIN_NAV = { path: '/admin', label: 'Admin Panel', icon: '🛡', title: 'Admin Control Panel' };
+
 export default function Sidebar() {
   const loc = useLocation();
-  const { user, logout } = useAuth() || {};
+  const { user, logout, isAdmin } = useAuth() || {};
   const isActive = (path) => loc.pathname === path;
   const [time, setTime] = useState(new Date());
 
@@ -47,6 +50,35 @@ export default function Sidebar() {
             {item.label}
           </Link>
         ))}
+
+        {/* Admin Panel — only visible to users with role=admin */}
+        {isAdmin && (
+          <>
+            <div style={{
+              margin: '12px 8px 6px',
+              borderTop: '1px solid rgba(255,255,255,0.07)',
+              paddingTop: 10,
+            }}>
+              <span style={{ fontSize: 10, opacity: 0.4, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '0 8px' }}>
+                Admin
+              </span>
+            </div>
+            <Link
+              to={ADMIN_NAV.path}
+              className={isActive(ADMIN_NAV.path) ? 'active' : ''}
+              title={ADMIN_NAV.title}
+              style={{
+                background: isActive(ADMIN_NAV.path)
+                  ? 'linear-gradient(135deg,rgba(124,58,237,0.3),rgba(167,139,250,0.15))'
+                  : 'transparent',
+                borderLeft: isActive(ADMIN_NAV.path) ? '3px solid #a78bfa' : '3px solid transparent',
+              }}
+            >
+              <span className="nav-icon" aria-hidden="true">{ADMIN_NAV.icon}</span>
+              {ADMIN_NAV.label}
+            </Link>
+          </>
+        )}
       </nav>
 
       {/* Footer */}
@@ -73,16 +105,26 @@ export default function Sidebar() {
             onClick={logout}
             title="Click to sign out"
           >
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {user.email || user.username || 'User'}
-            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
+              {isAdmin && (
+                <span style={{
+                  fontSize: 9, padding: '1px 5px', borderRadius: 4,
+                  background: 'rgba(167,139,250,0.2)', color: '#a78bfa',
+                  border: '1px solid rgba(167,139,250,0.4)', fontWeight: 700,
+                  letterSpacing: '0.04em', flexShrink: 0,
+                }}>ADMIN</span>
+              )}
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {user.email || user.username || 'User'}
+              </span>
+            </div>
             <span style={{ opacity: 0.5, fontSize: 11 }}>Sign out</span>
           </div>
         )}
 
         <div className="sidebar-footer-item" style={{ marginTop: 6 }}>
           <span style={{ fontSize: 10, opacity: 0.3, letterSpacing: '0.04em' }}>
-            v1.0 · Nairobi, Kenya
+            v1.2 · Nairobi, Kenya
           </span>
         </div>
       </div>

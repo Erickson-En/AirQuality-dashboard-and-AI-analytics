@@ -28,6 +28,7 @@ const chatbotRouter      = require('./routes/chatbot');
 const analyticsRouter    = require('./routes/analytics');
 const diagnosticsRouter  = require('./routes/diagnostics');
 const deviceConfigRouter = require('./routes/deviceConfig');
+const adminRouter        = require('./routes/admin');
 
 // Email
 const { sendAQIAlert, sendDailyDigest, verifyEmailConfig, calculateAQI, aqiCategory } = require('./utils/emailService');
@@ -305,6 +306,9 @@ app.use("/api/diagnostics", diagnosticsRouter);
 
 // ---------- DEVICE CONFIG ROUTES ----------
 app.use("/api/device-config", deviceConfigRouter);
+
+// ---------- ADMIN ROUTES (admin role required) ----------
+app.use("/api/admin", adminRouter);
 
 // ---------- SOCKET.IO ----------
 io.on("connection", socket => {

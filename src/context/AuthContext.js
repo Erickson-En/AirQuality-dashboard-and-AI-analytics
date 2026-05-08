@@ -26,8 +26,11 @@ export const AuthProvider = ({ children }) => {
     localStorage.removeItem('aq_user');
   };
 
+  // True only when the user has been explicitly assigned the admin role
+  const isAdmin = user?.role === 'admin';
+
   return (
-    <AuthContext.Provider value={{ user, login, logout }}>
+    <AuthContext.Provider value={{ user, login, logout, isAdmin }}>
       {children}
     </AuthContext.Provider>
   );
