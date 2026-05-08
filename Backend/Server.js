@@ -20,12 +20,14 @@ require('dotenv').config();
 const Reading = require('./models/reading');
 const Alert = require('./models/alert');
 const Setting = require('./models/settings');
+const DeviceConfig = require('./models/deviceConfig');
 
 // Routes
-const authRouter      = require('./routes/auth');
-const chatbotRouter   = require('./routes/chatbot');
-const analyticsRouter = require('./routes/analytics');
-const diagnosticsRouter = require('./routes/diagnostics');
+const authRouter         = require('./routes/auth');
+const chatbotRouter      = require('./routes/chatbot');
+const analyticsRouter    = require('./routes/analytics');
+const diagnosticsRouter  = require('./routes/diagnostics');
+const deviceConfigRouter = require('./routes/deviceConfig');
 
 // Email
 const { sendAQIAlert, sendDailyDigest, verifyEmailConfig, calculateAQI, aqiCategory } = require('./utils/emailService');
@@ -79,6 +81,7 @@ app.use(cors({
 // ---------- Server + WebSocket ----------
 const server = http.createServer(app);
 const io = socketIo(server, { cors: { origin: "*" } });
+app.set('io', io);  // expose io to route handlers
 
 // ---------- Connect MongoDB ----------
 mongoose.set('strictQuery', false);
@@ -172,7 +175,19 @@ app.post("/api/sensor-data", async (req, res) => {
     const User = require('./models/user');
     await handleAlertEmails(User, normalized, triggeredAlerts);
 
-    res.json({ success: true });
+    // ── Remote Config Feedback Loop ──────────────────────────────────────────
+    // If a pending config update exists, embed it in the HTTP response so the
+    // Arduino can read it immediately after a successful POST, apply the new
+    // parameters, and then POST /api/device-config/ack to confirm.
+    let pendingConfig = null;
+    try {
+      const twin = await DeviceConfig.findOne({ deviceId: 'arduino-001' });
+      if (twin && twin.status === 'pending') {
+        pendingConfig = twin.desired;
+      }
+    } catch (_) { /* non-critical */ }
+
+    res.json({ success: true, pendingConfig });
   } catch (err) {
     console.error("Sensor Data Error:", err.message);
     res.status(500).json({ error: "Failed to save sensor data" });
@@ -213,7 +228,16 @@ app.post("/api/airdata", async (req, res) => {
     const User = require('./models/user');
     await handleAlertEmails(User, normalized, triggeredAlerts);
 
-    res.json({ success: true });
+    // ── Remote Config Feedback Loop ──────────────────────────────────────────
+    let pendingConfig = null;
+    try {
+      const twin = await DeviceConfig.findOne({ deviceId: 'arduino-001' });
+      if (twin && twin.status === 'pending') {
+        pendingConfig = twin.desired;
+      }
+    } catch (_) { /* non-critical */ }
+
+    res.json({ success: true, pendingConfig });
   } catch (err) {
     console.error("Sensor Data Error:", err.message);
     res.status(500).json({ error: "Failed to save sensor data" });
@@ -278,6 +302,9 @@ app.use("/api/analytics", analyticsRouter);
 
 // ---------- DIAGNOSTICS ROUTES ----------
 app.use("/api/diagnostics", diagnosticsRouter);
+
+// ---------- DEVICE CONFIG ROUTES ----------
+app.use("/api/device-config", deviceConfigRouter);
 
 // ---------- SOCKET.IO ----------
 io.on("connection", socket => {

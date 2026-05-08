@@ -14,7 +14,7 @@ const LABEL  = { pm1:'PM1.0', pm25:'PM2.5', pm10:'PM10', co:'CO', co2:'CO₂', o
 const UNIT   = { pm1:'µg/m³', pm25:'µg/m³', pm10:'µg/m³', co:'ppm', co2:'ppm', o3:'ppb', no2:'µg/m³', temperature:'°C', humidity:'%', voc_index:'', nox_index:'' };
 const MAX_V  = { pm1:200, pm25:200, pm10:500, co:50, co2:5000, o3:500, no2:500, temperature:60, humidity:100, voc_index:500, nox_index:500 };
 
-const TABS = ['🔔 Thresholds','📧 Notifications','👤 Account','📡 Sensor'];
+const TABS = ['🔔 Thresholds','📧 Notifications','👤 Account','📡 Sensor','🔧 Hardware Config'];
 
 /* severity colour for slider badge */
 function badge(key, val) {
@@ -47,6 +47,28 @@ export default function Settings() {
   const [saving, setSaving]     = useState(false);
   const [toast, setToast]       = useState(null);
 
+  /* hardware config twin */
+  const HW_DEFAULTS = {
+    sendIntervalMs: 180000, mq7R0: 5.0, mq131R0: 10.0, rlValue: 10.0,
+    tempOffset: 0.0, humOffset: 0.0,
+    aqiWarnThreshold: 100, aqiCriticalThreshold: 150, aqiSevereThreshold: 200,
+  };
+  const HW_LABELS = {
+    sendIntervalMs:'Telemetry Interval', mq7R0:'MQ-7 R₀ (CO baseline)', mq131R0:'MQ-131 R₀ (O₃ baseline)',
+    rlValue:'Load Resistor Rₗ', tempOffset:'Temp Offset', humOffset:'Humidity Offset',
+    aqiWarnThreshold:'AQI Warning Threshold', aqiCriticalThreshold:'AQI Critical Threshold', aqiSevereThreshold:'AQI Severe Threshold',
+  };
+  const HW_UNITS = {
+    sendIntervalMs:'ms', mq7R0:'kΩ', mq131R0:'kΩ', rlValue:'kΩ',
+    tempOffset:'°C', humOffset:'%', aqiWarnThreshold:'', aqiCriticalThreshold:'', aqiSevereThreshold:'',
+  };
+  const HW_MIN = { sendIntervalMs:30000, mq7R0:0.1, mq131R0:0.1, rlValue:0.1, tempOffset:-10, humOffset:-10, aqiWarnThreshold:0, aqiCriticalThreshold:0, aqiSevereThreshold:0 };
+  const HW_MAX = { sendIntervalMs:900000, mq7R0:100, mq131R0:100, rlValue:100, tempOffset:10, humOffset:10, aqiWarnThreshold:500, aqiCriticalThreshold:500, aqiSevereThreshold:500 };
+  const HW_STEP= { sendIntervalMs:1000, mq7R0:0.1, mq131R0:0.1, rlValue:0.1, tempOffset:0.1, humOffset:0.1, aqiWarnThreshold:1, aqiCriticalThreshold:1, aqiSevereThreshold:1 };
+  const [hwConfig, setHwConfig] = useState(HW_DEFAULTS);
+  const [hwTwin, setHwTwin]     = useState(null);  // full twin from backend
+  const [hwSaving, setHwSaving] = useState(false);
+
   /* load saved settings */
   useEffect(() => {
     (async () => {
@@ -58,6 +80,20 @@ export default function Settings() {
       } catch (_) {}
     })();
   }, [userId]);
+
+  /* poll hardware config twin every 10 s */
+  useEffect(() => {
+    const fetchTwin = async () => {
+      try {
+        const { data } = await api.get('/api/device-config');
+        setHwTwin(data);
+        if (data?.desired) setHwConfig(c => ({ ...c, ...data.desired }));
+      } catch (_) {}
+    };
+    fetchTwin();
+    const id = setInterval(fetchTwin, 10000);
+    return () => clearInterval(id);
+  }, []);
 
   const showToast = (msg, ok=true) => {
     setToast({ msg, ok });
@@ -73,6 +109,17 @@ export default function Settings() {
     } catch { showToast('Save failed', false); }
     setSaving(false);
   }, [userId, thresholds, notif, sensor]);
+
+  /* push desired hardware config to device */
+  const saveHwConfig = async () => {
+    setHwSaving(true);
+    try {
+      const { data } = await api.post('/api/device-config/desired', hwConfig);
+      setHwTwin(data.config);
+      showToast('Hardware config queued — device will apply on next check-in ✓');
+    } catch { showToast('Failed to push hardware config', false); }
+    setHwSaving(false);
+  };
 
   /* test email */
   const testEmail = async (type) => {
@@ -323,8 +370,100 @@ export default function Settings() {
         </div>
       )}
 
-      {/* Save button (visible on all tabs except account which has its own) */}
-      {tab !== 2 && (
+      {/* ── TAB 4: Hardware Config ── */}
+      {tab === 4 && (
+        <div>
+          {/* Sync status badge */}
+          {hwTwin && (
+            <div style={{ ...card, display:'flex', justifyContent:'space-between', alignItems:'center', padding:'16px 20px' }}>
+              <div>
+                <div style={{ fontWeight:700, fontSize:15 }}>🔌 Device Sync Status</div>
+                {hwTwin.reported?.lastSeenAt && (
+                  <div style={{ fontSize:12, opacity:0.5, marginTop:4 }}>
+                    Last seen: {new Date(hwTwin.reported.lastSeenAt).toLocaleString()}
+                    {hwTwin.reported.firmwareVersion && ` · FW ${hwTwin.reported.firmwareVersion}`}
+                  </div>
+                )}
+              </div>
+              <div style={{
+                padding:'6px 16px', borderRadius:20, fontWeight:700, fontSize:13,
+                background: hwTwin.status === 'synced'  ? 'rgba(16,185,129,0.15)'
+                          : hwTwin.status === 'pending' ? 'rgba(245,158,11,0.15)'
+                          : 'rgba(239,68,68,0.15)',
+                color:      hwTwin.status === 'synced'  ? '#10b981'
+                          : hwTwin.status === 'pending' ? '#f59e0b'
+                          : '#ef4444',
+                border:`1px solid ${ hwTwin.status === 'synced' ? '#10b981' : hwTwin.status === 'pending' ? '#f59e0b' : '#ef4444'}`,
+              }}>
+                { hwTwin.status === 'synced'  ? '✅ In Sync'
+                : hwTwin.status === 'pending' ? '⏳ Pending — awaiting device check-in'
+                : '❌ Error' }
+              </div>
+            </div>
+          )}
+
+          <div style={card}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
+              <h3 style={{ margin:0, fontSize:17 }}>🔧 Hardware Configuration</h3>
+              <button onClick={() => setHwConfig(HW_DEFAULTS)} style={{
+                padding:'6px 14px', borderRadius:8, border:'1px solid rgba(255,255,255,0.15)',
+                background:'transparent', color:'rgba(255,255,255,0.6)', cursor:'pointer', fontSize:12,
+              }}>↺ Reset to defaults</button>
+            </div>
+
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))', gap:20 }}>
+              {Object.keys(HW_DEFAULTS).map(k => {
+                const isFloat = HW_STEP[k] < 1;
+                return (
+                  <div key={k} style={{ padding:16, borderRadius:10, background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.06)' }}>
+                    <label style={{ fontSize:13, fontWeight:600, display:'block', marginBottom:8, opacity:0.75 }}>
+                      {HW_LABELS[k]} {HW_UNITS[k] && <span style={{ opacity:0.4, fontWeight:400 }}>({HW_UNITS[k]})</span>}
+                    </label>
+                    <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                      <input
+                        type="range"
+                        min={HW_MIN[k]} max={HW_MAX[k]} step={HW_STEP[k]}
+                        value={hwConfig[k]}
+                        onChange={e => setHwConfig(c => ({ ...c, [k]: isFloat ? parseFloat(e.target.value) : parseInt(e.target.value) }))}
+                        style={{ flex:1, accentColor:'#a78bfa' }}
+                      />
+                      <input
+                        type="number"
+                        min={HW_MIN[k]} max={HW_MAX[k]} step={HW_STEP[k]}
+                        value={hwConfig[k]}
+                        onChange={e => setHwConfig(c => ({ ...c, [k]: isFloat ? parseFloat(e.target.value) : parseInt(e.target.value) }))}
+                        style={{ ...inp, width:80, textAlign:'right', padding:'6px 10px', accentColor:'#a78bfa' }}
+                      />
+                    </div>
+                    {/* Show what the device currently has, if available */}
+                    {hwTwin?.reported?.[k] !== undefined && hwTwin.reported[k] !== hwConfig[k] && (
+                      <div style={{ fontSize:11, opacity:0.45, marginTop:4 }}>
+                        Device currently: {hwTwin.reported[k]}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div style={{ marginTop:24, display:'flex', alignItems:'center', gap:16, flexWrap:'wrap' }}>
+              <button onClick={saveHwConfig} disabled={hwSaving} style={{
+                padding:'12px 28px', fontSize:15, fontWeight:700, borderRadius:10, cursor:'pointer', border:'none',
+                background:'linear-gradient(135deg,#7c3aed,#a78bfa)', color:'#fff',
+                opacity: hwSaving ? 0.6 : 1,
+              }}>
+                {hwSaving ? '⏳ Queuing…' : '📡 Push Config to Device'}
+              </button>
+              <span style={{ fontSize:12, opacity:0.4 }}>
+                Changes are applied on the next telemetry cycle (≤ {Math.round((hwConfig.sendIntervalMs||180000)/60000)} min)
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Save button (visible on threshold / notif / sensor tabs) */}
+      {(tab === 0 || tab === 1 || tab === 3) && (
         <button onClick={save} disabled={saving} className="btn primary" style={{
           padding:'12px 28px', fontSize:15, fontWeight:700, borderRadius:10, cursor:'pointer',
         }}>

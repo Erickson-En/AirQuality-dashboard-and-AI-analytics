@@ -3,7 +3,15 @@
  * Architecture: Arduino Due (32-bit ARM Cortex-M3)
  * Connectivity: SIM800L (2G GPRS)
  * Core Sensors: PMS5003, MH-Z19C, SGP41, MQ-7, MQ-131, DHT11
- * Documentation: 12-bit ADC Resolution | 180s Telemetry Cycle
+ * Documentation: 12-bit ADC Resolution | Remote Config Feedback Loop
+ *
+ * REMOTE CONFIGURATION LOOP
+ * --------------------------
+ * 1. Dashboard POSTs new config to  GET /api/device-config/desired  (sets status=pending)
+ * 2. On the next telemetry POST, the backend embeds { pendingConfig:{...} } in the JSON response
+ * 3. Arduino parses the response body, calls applyRemoteConfig(), updates runtime variables
+ * 4. Arduino then POSTs /api/device-config/ack  with the applied values (sets status=synced)
+ * 5. Dashboard detects status=synced and shows the green "In Sync" badge
  */
 
 #include "DHT.h"
@@ -37,9 +45,28 @@ const int BACKEND_PORT = 35059;
 const char *BACKEND_PATH = "/api/sensor-data";
 const char *PROTOCOL = "http://";
 
-const unsigned long SEND_INTERVAL = 180000; // 3 minute telemetry interval
-unsigned long lastSendTime = 0;
-bool gsmReady = false;
+// ── Runtime-configurable parameters (updated via remote config loop) ─────────
+unsigned long SEND_INTERVAL   = 180000; // telemetry period ms  (dashboard → 3 min default)
+unsigned long lastSendTime    = 0;
+bool gsmReady                 = false;
+
+// MQ Calibration Constants — runtime, not const so dashboard can override
+float MQ7_R0   = 5.0;   // kΩ baseline for MQ-7  (CO)
+float MQ131_R0 = 10.0;  // kΩ baseline for MQ-131 (O3)
+float RL_VALUE = 10.0;  // kΩ shared load resistor
+
+// Environmental offsets — runtime
+float TEMP_OFFSET = 0.0;
+float HUM_OFFSET  = 0.0;
+
+// AQI alert thresholds — runtime (mirrors ml/config.py)
+int AQI_WARN     = 100;
+int AQI_CRITICAL = 150;
+int AQI_SEVERE   = 200;
+
+// Firmware version string embedded in every ACK
+const char* FW_VERSION = "1.2.0-remotecfg";
+// ─────────────────────────────────────────────────────────────────────────────
 
 
 // Devices & Algorithms
@@ -54,21 +81,11 @@ VOCGasIndexAlgorithm voc_helper;
 NOxGasIndexAlgorithm nox_helper;
 
 
-// Variables & Calibration Constants
+// Variables & Display
 
 int page = 0;
 unsigned long lastSwitchTime = 0;
 const unsigned long pageInterval = 4000;
-
-// MQ Calibration Constants (Adjust these after your burn-in)
-// R0 = Resistance in clean air (kOhms). Use Page 4 to find these.
-const float MQ7_R0 = 5.0;
-const float MQ131_R0 = 10.0;
-const float RL_VALUE = 10.0; // Load resistor in kOhms
-
-// Environmental Offsets
-const float TEMP_OFFSET = 0.0;
-const float HUM_OFFSET = 0.0;
 
 uint16_t pm1_0 = 0, pm2_5 = 0, pm10 = 0;
 int32_t voc_index = 0, nox_index = 0;
@@ -276,7 +293,104 @@ void initGSM() {
 }
 
 // ---------------------------------------------------------
+// REMOTE CONFIG: parse a numeric field from a JSON string
+// Tiny hand-rolled parser — avoids pulling in ArduinoJson
+// ---------------------------------------------------------
+float extractJsonFloat(const String& json, const char* key) {
+  String search = String("\"") + key + "\"";
+  int idx = json.indexOf(search);
+  if (idx == -1) return NAN;
+  int colon = json.indexOf(':', idx + search.length());
+  if (colon == -1) return NAN;
+  // skip whitespace
+  int start = colon + 1;
+  while (start < (int)json.length() && (json[start] == ' ' || json[start] == '\t')) start++;
+  int end = start;
+  while (end < (int)json.length() && (json[end] == '-' || json[end] == '.' || isdigit(json[end]))) end++;
+  return json.substring(start, end).toFloat();
+}
+
+// Returns true if the body contains a non-null pendingConfig block
+bool parseConfigFromResponse(const String& body) {
+  if (body.indexOf("pendingConfig") == -1) return false;
+  if (body.indexOf("pendingConfig\":null") != -1) return false;
+
+  Serial.println(F("[CFG] Pending config detected in response — applying..."));
+
+  float v;
+  v = extractJsonFloat(body, "sendIntervalMs");       if (!isnan(v) && v > 0) { SEND_INTERVAL = (unsigned long)v; Serial.print(F("  sendIntervalMs=")); Serial.println(SEND_INTERVAL); }
+  v = extractJsonFloat(body, "mq7R0");                if (!isnan(v) && v > 0) { MQ7_R0   = v; Serial.print(F("  mq7R0="));   Serial.println(MQ7_R0, 3); }
+  v = extractJsonFloat(body, "mq131R0");              if (!isnan(v) && v > 0) { MQ131_R0 = v; Serial.print(F("  mq131R0=")); Serial.println(MQ131_R0, 3); }
+  v = extractJsonFloat(body, "rlValue");              if (!isnan(v) && v > 0) { RL_VALUE  = v; Serial.print(F("  rlValue="));  Serial.println(RL_VALUE, 3); }
+  v = extractJsonFloat(body, "tempOffset");           if (!isnan(v))           { TEMP_OFFSET = v; }
+  v = extractJsonFloat(body, "humOffset");            if (!isnan(v))           { HUM_OFFSET  = v; }
+  v = extractJsonFloat(body, "aqiWarnThreshold");     if (!isnan(v) && v > 0) { AQI_WARN     = (int)v; }
+  v = extractJsonFloat(body, "aqiCriticalThreshold"); if (!isnan(v) && v > 0) { AQI_CRITICAL = (int)v; }
+  v = extractJsonFloat(body, "aqiSevereThreshold");   if (!isnan(v) && v > 0) { AQI_SEVERE   = (int)v; }
+
+  Serial.println(F("[CFG] Configuration applied."));
+  return true;
+}
+
+// ---------------------------------------------------------
+// REMOTE CONFIG: POST ack to /api/device-config/ack
+// ---------------------------------------------------------
+void sendConfigAck() {
+  Serial.println(F("[CFG] Sending config ACK to backend..."));
+
+  String ackJson = "{";
+  ackJson += "\"sendIntervalMs\":"       + String(SEND_INTERVAL) + ",";
+  ackJson += "\"mq7R0\":"                + String(MQ7_R0, 3)   + ",";
+  ackJson += "\"mq131R0\":"              + String(MQ131_R0, 3) + ",";
+  ackJson += "\"rlValue\":"              + String(RL_VALUE, 3) + ",";
+  ackJson += "\"tempOffset\":"           + String(TEMP_OFFSET, 2) + ",";
+  ackJson += "\"humOffset\":"            + String(HUM_OFFSET, 2)  + ",";
+  ackJson += "\"aqiWarnThreshold\":"     + String(AQI_WARN)     + ",";
+  ackJson += "\"aqiCriticalThreshold\":" + String(AQI_CRITICAL) + ",";
+  ackJson += "\"aqiSevereThreshold\":"   + String(AQI_SEVERE)   + ",";
+  ackJson += "\"firmwareVersion\":\""     + String(FW_VERSION)   + "\"";
+  ackJson += "}";
+
+  String ackUrl = String(PROTOCOL) + String(BACKEND_URL) + ":" +
+                  String(BACKEND_PORT) + "/api/device-config/ack";
+
+  SIM800L_SERIAL.println("AT+HTTPTERM");
+  delay(500);
+  sendATCommand("AT+HTTPINIT", "OK", 2000);
+  delay(500);
+  sendATCommand("AT+HTTPPARA=\"CID\",1", "OK", 2000);
+  delay(500);
+  sendATCommand("AT+HTTPSSL=0", "OK", 2000);
+  delay(500);
+
+  String urlCmd = "AT+HTTPPARA=\"URL\",\"" + ackUrl + "\"";
+  sendATCommand(urlCmd.c_str(), "OK", 2000);
+  delay(500);
+  sendATCommand("AT+HTTPPARA=\"CONTENT\",\"application/json\"", "OK", 2000);
+  delay(500);
+
+  String dataCmd = "AT+HTTPDATA=" + String(ackJson.length()) + ",10000";
+  SIM800L_SERIAL.println(dataCmd);
+  delay(1000);
+
+  if (waitForResponse("DOWNLOAD", 2000)) {
+    SIM800L_SERIAL.println(ackJson);
+    delay(2000);
+    SIM800L_SERIAL.println("AT+HTTPACTION=1");
+    if (waitForResponse("+HTTPACTION:", 15000)) {
+      Serial.println(F("[CFG] ACK sent ✓"));
+    } else {
+      Serial.println(F("[CFG] ACK timeout"));
+    }
+    sendATCommand("AT+HTTPTERM", "OK", 2000);
+  } else {
+    Serial.println(F("[CFG] ACK data mode failed"));
+  }
+}
+
+// ---------------------------------------------------------
 // TELEMETRY TRANSMISSION: JSON Serialization & HTTP POST
+// Reads response body to pick up any pending remote config.
 // ---------------------------------------------------------
 void sendDataToBackend() {
   //skip if primary sensor values are still zero
@@ -358,34 +472,59 @@ void sendDataToBackend() {
 
     if (waitForResponse("+HTTPACTION:", 15000)) {
       String httpResponse = "";
-      unsigned long startTime = millis();
+      unsigned long respStart = millis();
       delay(1000);
 
-      while (millis() - startTime < 2000) {
+      while (millis() - respStart < 2000) {
         while (SIM800L_SERIAL.available()) {
           char c = SIM800L_SERIAL.read();
           httpResponse += c;
         }
       }
 
-      int firstComma = httpResponse.indexOf(',');
+      int firstComma  = httpResponse.indexOf(',');
       int secondComma = httpResponse.indexOf(',', firstComma + 1);
 
       if (firstComma > 0 && secondComma > firstComma) {
         String statusStr = httpResponse.substring(firstComma + 1, secondComma);
-        int statusCode = statusStr.toInt();
+        int statusCode   = statusStr.toInt();
+        int bodyLen      = httpResponse.substring(secondComma + 1).toInt();
 
         Serial.print(F("HTTP Status: "));
         Serial.println(statusCode);
 
         if (statusCode == 200 || statusCode == 201) {
           Serial.println(F("✓ Data sent successfully!"));
+
+          // ── Read response body to check for pending remote config ──────────
+          if (bodyLen > 0) {
+            // AT+HTTPREAD fetches the body into the SIM800L buffer
+            SIM800L_SERIAL.println("AT+HTTPREAD");
+            delay(500);
+            String body = "";
+            unsigned long bodyStart = millis();
+            while (millis() - bodyStart < 4000) {
+              while (SIM800L_SERIAL.available()) {
+                char c = SIM800L_SERIAL.read();
+                body += c;
+              }
+            }
+            Serial.print(F("Body: "));
+            Serial.println(body);
+
+            // Apply config and ACK if server sent a pendingConfig block
+            if (parseConfigFromResponse(body)) {
+              sendConfigAck();
+            }
+          } else {
+            sendATCommand("AT+HTTPTERM", "OK", 2000);
+          }
         } else {
           Serial.print(F("✗ HTTP Error/Redirect Code: "));
           Serial.println(statusCode);
+          sendATCommand("AT+HTTPTERM", "OK", 2000);
         }
       }
-      sendATCommand("AT+HTTPREAD", "OK", 3000);
     } else {
       Serial.println(F("✗ HTTP request timeout"));
     }
